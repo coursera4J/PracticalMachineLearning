@@ -1,0 +1,124 @@
+Predict Human Activity Quality from Activity Monitors
+========================================================
+```{r echo=FALSE, results='hide', message=FALSE}
+require(caret)
+train<-read.csv("pml-training.csv")
+test<-read.csv("pml-testing.csv")
+```
+
+### Data Cleansing and Preparation
+
+After loading the csv files (pml-training.csv and pml-testing.csv), it is noticed that the original data is kind of noisy. Some data columns have too many *NA* values, and they may not be helpful in terms of building a good predictive machine learning model. As shown below, there are 67 columns in training dataset with more than 90% of *NAs*, while in testing dataset, there are 100 columns that contain only *NAs*. 
+
+```{r}
+sum(colSums(is.na(train)) > nrow(train) *0.9)
+sum(colSums(is.na(test)) == nrow(test))
+```
+Therefore, the first step here is to remove these *NA* data columns. The following R program presents our approach of removing *NA* data columns from both training and testing dataset. Please note that the data columns in training and testing dataset should be consistent, i.e. they must share exactly the same "predictors". 
+
+```{r}
+train<-train[, colSums(is.na(train)) < nrow(train)/10 ] #removing data columns with 90% NAs from training dataset.
+test<-test[, colSums(is.na(test)) != nrow(test)] # removing data columns with all NAs from testing dataset.
+commonCols <-intersect(names(train), names(test)) #find the common columns between training and testing dataset.
+commonCols[length(commonCols) +1] <- "classe" # adding the column "classe" back.
+train<-train[, which(names(train) %in% commonCols)] #prodcue the final training dataset
+test<-test[,which(names(test) %in% commonCols)] #produce the final testing dataset
+```
+
+In addtion to the *NA* valules, according to our understanding about this problem, some data columns, such as "user name", "time stamps", and "windows", may not play a significant role in predicting the final result. Therefore, we decide to remove those data columns from the dataset as well.
+
+**As a result of this data preparation phase, the final training dataset has 53 columns, and the final testing dataset has 52 columns (without the predicting column "classe")**
+
+```{r echo=FALSE }
+train<-train[,8:60]
+test<-test[,8:59]
+```
+
+### Partition Data for Cross-Validation
+
+In order to perform necessary cross validation of the model, the original training dataset is further divided into two horizonal subsets. 70% of the data will be used to train the model, and the rest 30% of the data will be used for cross validation. The detailed R program to partition the dataset is attached below.
+
+```{r}
+inTrain<-createDataPartition(y=train$classe, p=0.7, list=FALSE)
+
+training<-train[inTrain,]
+trainingData<-training[,1:52]
+trainingClass<-training[,53]
+
+cross<-train[-inTrain,]
+crossData<-cross[,1:52]
+crossValidationValue<-cross[,53]
+```
+
+### Build Predictive Model
+
+There may be multiple alternatives available for us to build a predictive model. In order to get a quick understanding on which one might be the best choice, given this particular case, we created a smaller-size dataset (e.g. 5% of the training data), and rapidly build differnt models with different methods, along with some quick model analysis. 
+
+``` {r echo=FALSE}
+#create smaller dataset(training and testing) for rapid modeling
+smallTrain<-createDataPartition(y=training$classe, p=0.05, list=FALSE)
+sTraining<-training[smallTrain,]
+smallTest<-createDataPartition(y=cross$classe, p=0.1, list=FALSE)
+sTesting<-cross[smallTest,]
+```
+
+As shown in the R program below, we selected 4 different methods, and they are: Random Forests (rf), Linear Discriminant Analysis (lda), K Nearest Neighbors (knn), and Gradient Boosted Methods (gbm).
+
+```{r message=FALSE}
+#Build different models 
+modelRF<-train(sTraining[,1:52], sTraining[,53], ntree=100, method="rf")
+modelLDA<-train(sTraining[,1:52], sTraining[,53], method="lda")
+modelKNN<-train(sTraining[,1:52], sTraining[,53], method="knn")
+modelGBM<-train(sTraining[,1:52], sTraining[,53], method="gbm", verbose=FALSE)
+```
+
+After quickly build these 4 predictive models, a quick round of analysis of predictive accurancy is aso performed, and the results are plotted below.
+
+```{r}
+#Perform quick model analysis
+tLDA<-table(predict(modelLDA, sTesting[,1:52]), sTesting[,53])
+tGBM<-table(predict(modelGBM, sTesting[,1:52]), sTesting[,53])
+tRF<-table(predict(modelRF, sTesting[,1:52]), sTesting[,53])
+tKNN<-table(predict(modelKNN, sTesting[,1:52]), sTesting[,53])
+
+#Plot analysis results
+par(mfrow=c(2,2))
+plot(tKNN, main="K Nearest Neighbor")
+plot(tLDA, main="Liner Discriminant Analysis")
+plot(tGBM, main="Gradient Boosted Method")
+plot(tRF, main="Random Forest")
+```
+
+As shown in the model perforamnce analysis above, it seems that Random Forests and Gradient Boosted Methods deliver a better performance than the other two. With a little closer look, it seems that the Random Forests may be slightly better than the Gradient Boosted Methods. Therefore, we will pick ***Random Forests*** to build the final predictive model.
+
+The R code below creates a Random Forests model with the variable *ntree* set to 800. The previously prepared training dataset is used to train this model. The detailed result of the trained predictive model is presented below, including the ***OOB estimte of error rate*** and the detailed ***confusion matrix***. 
+
+```{r}
+modelRF<-randomForest(trainingData, trainingClass, ntree=800)
+modelRF
+```
+
+### Perform Cross Validation
+
+The predictive model is applied against the cross-validation dataset (30% of the orignal training data) that was set aside previously. The detailed performance of this predictive model against the cross-validation dataset is shown below. 
+```{r echo=FALSE}
+predictedValue<-predict(modelRF, crossData)
+PredictionPerformance<-table(predictedValue, crossValidationValue)
+PredictionPerformance
+plot(PredictionPerformance)
+```
+
+**The out-of-sample error rate is:**
+```{r echo=FALSE}
+sum(predictedValue!=crossValidationValue)/length(crossValidationValue)
+```
+
+### Final Prediction Result
+Here is the predition result of applying the final predictive model against the original testing csv file. The results actually passed all 20 test cases in the second part of this project.
+
+```{r}
+answers<-predict(modelRF, test)
+answers
+```
+
+
